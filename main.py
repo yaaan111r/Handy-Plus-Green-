@@ -1,27 +1,31 @@
 import os
 import logging
 import requests
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from google import genai
 from google.genai import types
 
-# הגדרת לוגים
+# הגדרת לוגים להתחקות אחר אירועים ב-Render
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# מפתח Gemini API
+# 1. טעינת משתני סביבה
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-# הגדרות Green API (יש להגדיר ב-Render Environment Variables)
 GREEN_API_INSTANCE_ID = os.getenv("GREEN_API_INSTANCE_ID") # למשל: 7133123456
-GREEN_API_TOKEN = os.getenv("GREEN_API_TOKEN")             # המפתח מ-Green API
+GREEN_API_TOKEN = os.getenv("GREEN_API_TOKEN")             # ה-Token מ-Green API
 
-GREEN_API_BASE_URL = f"https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}"
+# בדיקת מפתח Gemini באופן בטוח למניעת קריסת השרת בהעלאה
+if not GEMINI_API_KEY:
+    logger.error("CRITICAL: GEMINI_API_KEY is missing in Environment Variables!")
+    client = None
+else:
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
-# מחירון עבודה בלבד (Labor Only)
+GREEN_API_BASE_URL = f"https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}" if GREEN_API_INSTANCE_ID else ""
+
+# 2. מחירון עבודה בלבד (Labor Only) עבור Handy Plus
 PRICE_LIST = """
 1. התקנת גוף תאורה צמוד תקרה/קיר: 180-250 ש"ח
 2. החלפת שקע/מתג חשמל יחיד: 150-200 ש"ח
@@ -50,15 +54,23 @@ SYSTEM_PROMPT = f"""
 """
 
 def send_green_api_message(chat_id: str, text: str):
-    """שליחת הודעת טקסט בחזרה ללקוח דרך Green API"""
+    """שליחת הודעת טקסט בחזרה ללקוח דרך Green API עם timeout בטוח"""
+    if not GREEN_API_INSTANCE_ID or not GREEN_API_TOKEN:
+        logger.error("Green API Instance ID or Token missing. Cannot send message.")
+        return
+
     url = f"{GREEN_API_BASE_URL}/sendMessage/{GREEN_API_TOKEN}"
     payload = {
         "chatId": chat_id,
         "message": text
     }
     headers = {"Content-Type": "application/json"}
-    response = requests.post(url, json=payload, headers=headers)
-    logger.info(f"Green API Response Status: {response.status_code}")
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        logger.info(f"Green API Response Status: {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send message via Green API: {e}")
 
 @app.post("/webhook")
 async def whatsapp_webhook(request: Request):
@@ -66,7 +78,7 @@ async def whatsapp_webhook(request: Request):
         data = await request.json()
         logger.info(f"Incoming Webhook Payload: {data}")
 
-        # סינון אירועים שלא קשורים להודעה נכנסת
+        # סינון אירועים שאינם הודעה נכנסת מלקוח
         type_webhook = data.get("typeWebhook")
         if type_webhook != "incomingMessageReceived":
             return {"status": "ignored"}
@@ -78,24 +90,33 @@ async def whatsapp_webhook(request: Request):
         if not chat_id:
             return {"status": "no_chat_id"}
 
+        # בדיקה שתשתיות ה-AI תקינות
+        if not client:
+            logger.error("Gemini client is not initialized.")
+            send_green_api_message(chat_id, "מצטערים, המערכת בתחזוקה קלה כרגע. אנא נסה שוב מאוחר יותר.")
+            return {"status": "error", "message": "Gemini API key missing"}
+
         contents = [SYSTEM_PROMPT]
+        type_message = message_data.get("typeMessage")
 
         # 1. טיפול בתמונות נכנסות
-        type_message = message_data.get("typeMessage")
         if type_message in ["imageMessage", "fileMessage"]:
             file_data = message_data.get("fileMessageData", {})
             download_url = file_data.get("downloadUrl")
             caption = file_data.get("caption", "")
 
             if download_url:
-                img_res = requests.get(download_url)
-                if img_res.status_code == 200:
-                    image_part = types.Part.from_bytes(
-                        data=img_res.content,
-                        mime_type=img_res.headers.get("Content-Type", "image/jpeg")
-                    )
-                    contents.append(image_part)
-            
+                try:
+                    img_res = requests.get(download_url, timeout=15)
+                    if img_res.status_code == 200:
+                        image_part = types.Part.from_bytes(
+                            data=img_res.content,
+                            mime_type=img_res.headers.get("Content-Type", "image/jpeg")
+                        )
+                        contents.append(image_part)
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Failed to download image: {e}")
+
             if caption:
                 contents.append(caption)
 
@@ -107,18 +128,21 @@ async def whatsapp_webhook(request: Request):
                 contents.append(text_body)
 
         else:
-            # סוג הודעה לא נתמך (למשל הודעה קולית / מיקום)
-            send_green_api_message(chat_id, "שלום! כרגע אני יודע לקבל הודעות טקסט ותמונות בלבד. נשמח שתתאר את התקלה או שתשלח תמונה.")
+            # מענה להודעות לא נתמכות (קוליות, מיקום וכו')
+            send_green_api_message(
+                chat_id, 
+                "שלום! כרגע אני יודע לקבל הודעות טקסט ותמונות בלבד. נשמח שתתאר את התקלה או שתשלח תמונה."
+            )
             return {"status": "unsupported_media"}
 
-        # 3. פנייה למודל Gemini 3.1-Flash-Lite
+        # 3. פנייה ל-Gemini 3.1-Flash-Lite
         response = client.models.generate_content(
             model="gemini-3.1-flash-lite",
             contents=contents
         )
         reply_text = response.text
 
-        # 4. שליחת התשובה בחזרה ללקוח
+        # 4. שליחת התשובה ללקוח ב-WhatsApp
         send_green_api_message(chat_id, reply_text)
 
         return {"status": "success"}
@@ -129,4 +153,4 @@ async def whatsapp_webhook(request: Request):
 
 @app.get("/")
 def health_check():
-    return {"status": "Handy Plus Green API Bot is running!"}
+    return {"status": "Handy Plus Green API Bot is up and running!"}
