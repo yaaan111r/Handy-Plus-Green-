@@ -13,7 +13,7 @@ app = FastAPI()
 
 # 1. טעינת משתני סביבה
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GREEN_API_INSTANCE_ID = os.getenv("GREEN_API_INSTANCE_ID") # למשל: 7133123456
+GREEN_API_INSTANCE_ID = os.getenv("GREEN_API_INSTANCE_ID") # למשל: 710722732656
 GREEN_API_TOKEN = os.getenv("GREEN_API_TOKEN")             # ה-Token מ-Green API
 
 # בדיקת מפתח Gemini באופן בטוח למניעת קריסת השרת בהעלאה
@@ -72,6 +72,12 @@ def send_green_api_message(chat_id: str, text: str):
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to send message via Green API: {e}")
 
+# בדיקת תקינות ראשונית של Webhook (עבור מנגנון האימות של Green API)
+@app.get("/webhook")
+def verify_webhook():
+    return {"status": "Webhook endpoint is active"}
+
+# קבלת הודעות נכנסות מ-Green API
 @app.post("/webhook")
 async def whatsapp_webhook(request: Request):
     try:
