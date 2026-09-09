@@ -21,39 +21,85 @@ if not GEMINI_API_KEY:
 else:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-# תוקן: שימוש בכתובת ה-Host הספציפית ל-Instance שלך (7107)
 GREEN_API_BASE_URL = f"https://7107.api.greenapi.com/waInstance{GREEN_API_INSTANCE_ID}" if GREEN_API_INSTANCE_ID else ""
 
+# ניהול זיכרון שיחות בזיכרון השרת (לפי chatId)
+chat_sessions = {}
+
 PRICE_LIST = """
-1. התקנת גוף תאורה צמוד תקרה/קיר: 180-250 ש"ח
-2. החלפת שקע/מתג חשמל יחיד: 150-200 ש"ח
-3. התקנת מאוורר תקרה: 300-450 ש"ח
-4. תליית טלוויזיה על זרוע/מתלה (עד 65 אינץ'): 250-350 ש"ח
-5. תליית מדף / תמונה / מראה: 120-180 ש"ח
-6. הרכבת ארון מאיקאה (2 דלתות): 300-450 ש"ח
-7. החלפת סיפון בכיור: 180-250 ש"ח
-8. החלפת ברז כיור/מטבח: 220-300 ש"ח
-9. תיקון נזילה קלה / החלפת גומייה: 150-200 ש"ח
-10. התקנת מנעול / צילינדר בדלת: 200-300 ש"ח
+מחירים לעבודה בלבד (ללא חומרים):
+אינסטלציה:
+- פתיחת סתימה קלה בכיור/אמבטיה/מקלחון: 180-300 ₪
+- פתיחת סתימה מורכבת/צנרת ראשית: 450-700 ₪
+- החלפת סיפון: 250-400 ₪
+- החלפת ברז (פרח/נשלף/קיר): 280-450 ₪
+- תיקון/החלפת מנגנון ניאגרה גלויה: 180-350 ₪
+- תיקון/החלפת מנגנון ניאגרה סמויה: 250-380 ₪
+- החלפת גומיות/אטמים: 180-250 ₪
+- תיקון נזילה גלויה: 180-350 ₪
+- החלפת ראש דוש/צינור: 180-280 ₪
+- החלפת/התקנת ברז ניל: 180-280 ₪
+
+חשמל ותאורה:
+- התקנת גוף תאורה צמוד תקרה/קיר: 230-400 ₪
+- התקנת נברשת מורכבת: 280-480 ₪
+- התקנת מאוורר תקרה: 250-380 ₪
+- החלפת מפסק לתריס חשמלי: 300-450 ₪
+
+הנדימן ותלייה:
+- תליית טלוויזיה: 180-280 ₪
+- תליית מדפים/זרוע מיקרוגל: 180-250 ₪
+- תליית תמונות/מראות: 150-280 ₪
+- תליית וילון: 150-280 ₪
+- אביזרי אמבטיה: 150-280 ₪
+
+הרכבת רהיטים:
+- ארון 2 דלתות: 350-550 ₪ | ארון 3-4 דלתות/הזזה: 450-750 ₪
+- שידה/קומודה/שולחן/כוורת: 280-550 ₪
+- מיטה: 350-650 ₪
+- כיוון צירים/מסילות: 120-250 ₪
+
+דלתות:
+- כיוון דלת/החלפת ידית: 180-250 ₪
+
+איננו מבצעים: החלפת אסלות/מונובלוק, נקודות מים חדשות, תיקון מזגנים.
 """
 
 SYSTEM_PROMPT = f"""
-אתה נציג שירות ואבחון אוטומטי של חברת "הנדי פלוס" (Handy Plus) המציעה שירותי הנדימן ותיקונים לבית.
-תפקידך לאבחן את התקלה או ההתקנה הנדרשת ולספק הצעת מחיר מדויקת עבור **עבודה בלבד (Labor Only)**.
+אתה בוט וואטסאפ מהיר, ממוקד וקצר של 'הנדי פלוס'.
+מטרתך: לאסוף פרטים במינימום הודעות ולתת הצעת מחיר.
 
-המחירון המלא של הלקוח:
+חוקי ברזל נוקשים:
+1. הודעה קצרה בלבד! מקסימום 1-2 משפטים.
+2. תברך "שלום" רק בהודעה הראשונה בשיחה. לאחר מכן - אל תגיד "שלום" יותר לעולם, אלא אם אמרו שלום כלפייך!
+3. **ניתוח תמונות ואישור מהמשתמש:**
+   - ברגע שמתקבלת תמונה, נתח אותה מיד.
+   - שאל את הלקוח בדיוק בנוסח הבא: "אני רואה בתמונה [תיאור הבעיה]. האם נדרש לבצע [תיאור השירות המבוקש המדויק מהמחירון]?"
+4. **זרימת השיחה:**
+   - אם המשתמש מאשר (תשובה חיובית כמו "כן", "נכון", "בדיוק"): התקדם מיד לשלב של שאלת כתובת מדויקת ודחיפות.
+   - אם המשתמש משיב בשלילה (או אומר שלא לזה התכוון): פנה בצורה נעימה ובקש ממנו לחדד מה הטיפול הדרוש.
+5. **עבודות שאיננו מבצעים** (כמו תיקון מזגן, החלפת אסלה, נקודת מים): ענה מיד: "אנחנו לא מבצעים עבודה זו, לבירורים ניתן לחייג 055-9821845".
+6. **מתן הצעת מחיר:** לאחר אישור השירות והגדרת הכתובת/הדחיפות - תן מחיר משוער מהמחירון (עבודה בלבד) + הפניה למספר 055-9821845.
+
+מחירון:
 {PRICE_LIST}
-
-כללים מחייבים לתשובה:
-1. **אם התקבלה תמונה:** נתח אותה תחילה. שאל את המשתמש שאלת אישור קצרה, למשל: "מזיהוי התמונה נראה שמדובר ב-[שם השירות], האם נדרש [תיאור הפעולה]?"
-2. **אם המשתמש מאשר או מפרט בטקסט:** התאם את השירות למחירון, קובע את טווח המחיר, וציין בפירוש שהמחיר הינו עבור עבודה בלבד ואינו כולל חלפים/ציוד.
-3. **שירותים שאינם במחירון (כגון תיקון מזגנים/מוצרי חשמל כבדים):** ציין באדיבות שהשירות אינו מבוצע על ידך.
-4. שמור על שפה מקצועית, קצרה, אדיבה ומהירה.
 """
 
+def get_or_create_chat(user_id: str):
+    """ניהול זיכרון שיחה מול Gemini לכל משתמש בנפרד"""
+    if user_id not in chat_sessions:
+        chat_sessions[user_id] = client.chats.create(
+            model='gemini-2.5-flash',
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT
+            )
+        )
+    return chat_sessions[user_id]
+
 def send_green_api_message(chat_id: str, text: str):
+    """שליחת הודעת טקסט דרך Green API"""
     if not GREEN_API_INSTANCE_ID or not GREEN_API_TOKEN:
-        logger.error("Green API Instance ID or Token missing. Cannot send message.")
+        logger.error("Green API Instance ID or Token missing.")
         return
 
     url = f"{GREEN_API_BASE_URL}/sendMessage/{GREEN_API_TOKEN}"
@@ -65,7 +111,7 @@ def send_green_api_message(chat_id: str, text: str):
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
-        logger.info(f"Green API Response Status: {response.status_code}, Body: {response.text}")
+        logger.info(f"Green API Response Status: {response.status_code}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to send message via Green API: {e}")
 
@@ -77,8 +123,7 @@ def verify_webhook():
 async def whatsapp_webhook(request: Request):
     try:
         data = await request.json()
-        logger.info(f"Incoming Webhook Payload: {data}")
-
+        
         type_webhook = data.get("typeWebhook")
         if type_webhook != "incomingMessageReceived":
             return {"status": "ignored"}
@@ -91,14 +136,13 @@ async def whatsapp_webhook(request: Request):
             return {"status": "no_chat_id"}
 
         if not client:
-            logger.error("Gemini client is not initialized.")
-            send_green_api_message(chat_id, "מצטערים, המערכת בתחזוקה קלה כרגע. אנא נסה שוב מאוחר יותר.")
+            send_green_api_message(chat_id, "שלום! ליצירת קשר עם הנדי פלוס חייג: 055-9821845")
             return {"status": "error", "message": "Gemini API key missing"}
 
-        contents = [SYSTEM_PROMPT]
+        contents = []
         type_message = message_data.get("typeMessage")
 
-        # 1. טיפול בתמונות
+        # 1. קבלת תמונות
         if type_message in ["imageMessage", "fileMessage"]:
             file_data = message_data.get("fileMessageData", {})
             download_url = file_data.get("downloadUrl")
@@ -119,7 +163,7 @@ async def whatsapp_webhook(request: Request):
             if caption:
                 contents.append(caption)
 
-        # 2. תוקן: טיפול בהודעת טקסט רגילה או מורחבת (extendedTextMessage)
+        # 2. קבלת טקסט רגיל או מורחב
         elif type_message in ["textMessage", "extendedTextMessage"]:
             text_data = message_data.get("textMessageData") or message_data.get("extendedTextMessageData", {})
             text_body = text_data.get("textMessage") or text_data.get("text", "")
@@ -129,20 +173,44 @@ async def whatsapp_webhook(request: Request):
         else:
             send_green_api_message(
                 chat_id, 
-                "שלום! כרגע אני יודע לקבל הודעות טקסט ותמונות בלבד. נשמח שתתאר את התקלה או שתשלח תמונה."
+                "שלום! כרגע אני יודע לקבל הודעות טקסט ותמונות בלבד. במה נוכל לעזור?"
             )
             return {"status": "unsupported_media"}
 
-        # 3. תוקן: שם דגם תקין ונתמך
-        response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
-            contents=contents
-        )
-        reply_text = response.text
+        if not contents:
+            send_green_api_message(chat_id, "שלום! הגעת להנדי פלוס. במה נוכל לעזור?")
+            return {"status": "empty_payload"}
 
-        # 4. שליחת התשובה
-        send_green_api_message(chat_id, reply_text)
+        # הכנת ה-payload לשליחה בשיחה
+        payload = contents if len(contents) > 1 else contents[0]
 
+        # 3. ניהול שיחה עם זיכרון (Chat Session)
+        bot_reply = None
+        try:
+            chat = get_or_create_chat(chat_id)
+            response = chat.send_message(payload)
+            if response and response.text:
+                bot_reply = response.text.strip()
+        except Exception as e:
+            logger.error(f"Chat Session error for {chat_id}, resetting session: {e}")
+            try:
+                chat_sessions[chat_id] = client.chats.create(
+                    model='gemini-2.5-flash',
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT
+                    )
+                )
+                response = chat_sessions[chat_id].send_message(payload)
+                if response and response.text:
+                    bot_reply = response.text.strip()
+            except Exception as inner_e:
+                logger.error(f"Critical Gemini API Error: {inner_e}")
+
+        if not bot_reply:
+            bot_reply = "במה נוכל לעזור בתחום התיקונים? לפרטים נוספים ניתן גם לחייג 055-9821845."
+
+        # 4. שליחת התשובה בחזרה ללקוח
+        send_green_api_message(chat_id, bot_reply)
         return {"status": "success"}
 
     except Exception as e:
@@ -150,5 +218,5 @@ async def whatsapp_webhook(request: Request):
         return {"status": "error", "message": str(e)}
 
 @app.get("/")
-def health_check():
+def home():
     return {"status": "Handy Plus Green API Bot is up and running!"}
