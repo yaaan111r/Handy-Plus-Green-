@@ -89,7 +89,7 @@ def get_or_create_chat(user_id: str):
     """ניהול זיכרון שיחה מול Gemini לכל משתמש בנפרד"""
     if user_id not in chat_sessions:
         chat_sessions[user_id] = client.chats.create(
-            model='gemini-2.5-flash',
+            model='gemini-3.1-flash-lite',
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT
             )
@@ -195,7 +195,7 @@ async def whatsapp_webhook(request: Request):
             logger.error(f"Chat Session error for {chat_id}, resetting session: {e}")
             try:
                 chat_sessions[chat_id] = client.chats.create(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.1-flash-lite',
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT
                     )
